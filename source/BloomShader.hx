@@ -2,40 +2,55 @@ package;
 
 import flixel.system.FlxAssets.FlxShader;
 
-class BloomShader extends FlxShader // BLOOM SHADER BY BBPANZU
+class BloomShader extends FlxShader
 {
 	@:glFragmentSource('
-	#pragma header
+#pragma header
 
-    // GAUSSIAN BLUR SETTINGS
-  	uniform float dim;
-    uniform float Directions;
-    uniform float Quality; 
-    uniform float Size; 
+uniform float dim;
+uniform float Directions;
+uniform float Quality;
+uniform float Size;
 
-	void main(void)
-	{ 
-		vec2 uv = openfl_TextureCoordv.xy ;
+void main(void)
+{
+    vec2 uv = openfl_TextureCoordv.xy;
+    vec4 original = flixel_texture2D(bitmap, uv);
 
-		float Pi = 6.28318530718; // Pi*2
+    // Skip the blur entirely when effectively disabled.
+    if (Size <= 0.0 || Directions <= 0.0 || Quality <= 0.0)
+    {
+        gl_FragColor = original;
+        return;
+    }
 
-		vec4 Color = texture2D( bitmap, uv);
-		
-		for(float d=0.0; d<Pi; d+=Pi/Directions){
-			for(float i=1.0/Quality; i<=1.0; i+=1.0/Quality){
+    vec4 Color = original;
 
-				float ex = (cos(d)*Size*i)/openfl_TextureSize.x;
-				float why = (sin(d)*Size*i)/openfl_TextureSize.y;
-				Color += flixel_texture2D( bitmap, uv+vec2(ex,why));	
-			}
-		}
-		
-		Color /= (dim * Quality) * Directions - 15.0;
-		vec4 bloom =  (flixel_texture2D( bitmap, uv)/ dim)+Color;
+    // 4 directions × 2 samples = 8 texture lookups
+    float dirStep = 6.28318530718 / 4.0;
 
-		gl_FragColor = bloom;
+    for (int d = 0; d < 4; d++)
+    {
+        float angle = float(d) * dirStep;
+        vec2 direction = vec2(cos(angle), sin(angle));
 
-	}
+        Color += flixel_texture2D(
+            bitmap,
+            uv + direction * (Size * 0.5) / openfl_TextureSize
+        );
+
+        Color += flixel_texture2D(
+            bitmap,
+            uv + direction * Size / openfl_TextureSize
+        );
+    }
+
+    Color /= 9.0;
+
+    vec4 bloom = (original / dim) + Color;
+
+    gl_FragColor = bloom;
+}
 	')
 	public function new()
 	{
