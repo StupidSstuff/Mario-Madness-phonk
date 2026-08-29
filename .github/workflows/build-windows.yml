@@ -49,16 +49,29 @@ jobs:
           haxelib set hxCodec 2.6.1
           haxelib set lime 8.0.2
           haxelib set openfl 9.2.0
+          echo "Selected Haxelib versions:"
+          haxelib list
 
-      - name: Configure Lime and OpenFL
+      - name: Configure OpenFL only
         shell: pwsh
         run: |
-          haxelib run lime setup
+          haxelib set lime 8.0.2
+          haxelib set openfl 9.2.0
           haxelib run openfl setup
+
+      - name: Verify Lime/OpenFL versions
+        shell: pwsh
+        run: |
+          Write-Host "Lime:"
+          haxelib list lime
+          Write-Host "OpenFL:"
+          haxelib list openfl
 
       - name: Build Windows Debug
         shell: pwsh
         run: |
+          haxelib set lime 8.0.2
+          haxelib set openfl 9.2.0
           haxelib run lime build windows -debug
 
       - name: Package build
