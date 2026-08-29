@@ -4,96 +4,105 @@ import flixel.FlxG;
 import flixel.system.FlxAssets.FlxShader;
 
 /**
- * By @Ne_Eo_Twitch, modded a bit by lunar
+ * Optimized VHS / NTSC shader collection.
+ *
+ * Main goal:
+ * - Keep the visual style
+ * - Reduce expensive procedural noise
+ * - Reduce unnecessary math
+ * - Avoid extra texture reads where possible
  */
+
+/* ============================================================
+ * NTSC / CRT FILTER
+ * ============================================================ */
+
 class NTSCSFilter extends FlxShader {
 	@:glFragmentSource('
-	#pragma header
+		#pragma header
 
-	// DECODE NTSC AND CRT EFFECTS
+		uniform float uFrame;
+		uniform float uScanlineEffect;
 
-	uniform float uFrame;
-	uniform float uScanlineEffect;
+		const float YRES = 264.0;
 
-	const float XRES = 54.0 * 8.0;
-	const float YRES = 33.0 * 8.0;
+		// Reduced fisheye strength.
+		const float fishEyeX = 0.1;
+		const float fishEyeY = 0.24;
 
-	#define BRIGHTNESS 1.1
-	#define SATURATION 1.8
-	#define BLUR 0.7
-	#define BLURSIZE 0.2
-	#define CHROMABLUR 0.1
-	#define CHROMASIZE 5.0
-	#define SUBCARRIER 2.1
-	#define CROSSTALK 0.1
-	#define SCANFLICKER 0.2
-	#define INTERFERENCE1 1.0
-	#define INTERFERENCE2 0.01
+		// Much cheaper than the original giant pow().
+		float vignette(vec2 uv)
+		{
+			uv = abs(uv * 2.0 - 1.0);
 
-	const float fishEyeX = 0.1;
-	const float fishEyeY = 0.24;
-	const float vignetteRounding = 160.0;
-	const float vignetteSmoothness = 1.;
+			float v = 1.0 - dot(uv, uv) * 0.45;
 
-	#define PI 3.14159265
+			return clamp(v, 0.0, 1.0);
+		}
 
-	// Fish-eye effect
-	vec2 fisheye(vec2 uv) {
-		uv *= vec2(1.0+(uv.y*uv.y)*fishEyeX,1.0+(uv.x*uv.x)*fishEyeY);
-		return uv;
-	}
+		float hash12(vec2 p)
+		{
+			vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+			p3 += dot(p3, p3.yzx + 33.33);
 
-	float vignette(vec2 uv) {
-		uv *= 2.0;
-		float amount = 1.0 - sqrt(pow(abs(uv.x), vignetteRounding) + pow(abs(uv.y), vignetteRounding));
-		float vhard = smoothstep(0., vignetteSmoothness, amount);
-		return(vhard);
-	}
+			return fract((p3.x + p3.y) * p3.z);
+		}
 
-	float hash12(vec2 p)
-	{
-		vec3 p3 = fract(vec3(p.xyx) * .1031);
-		p3 += dot(p3, p3.yzx + 33.33);
-		return fract((p3.x + p3.y) * p3.z);
-	}
+		void main()
+		{
+			vec2 uv = openfl_TextureCoordv.xy;
 
-	float random(vec2 p, float t) {
-		return hash12((p * 0.152 + t * 1500. + 50.0));
-	}
+			// Fish eye
+			vec2 centered = uv - 0.5;
 
-	float peak(float x, float xpos, float scale) {
-		return clamp((1.0 - x) * scale * log(1.0 / abs(x - xpos)), 0.0, 1.0);
-	}
+			uv += centered * vec2(
+				centered.y * centered.y * fishEyeX,
+				centered.x * centered.x * fishEyeY
+			);
 
-	void main() {
-		vec2 uv = openfl_TextureCoordv.xy;
-		vec2 fragCoord = uv * openfl_TextureSize.xy;
+			// Scanline flicker
+			float scanY = floor(uv.y * YRES + 0.5);
 
-		float scany = floor(uv.y * YRES + 0.5);
+			float randomValue = hash12(
+				vec2(scanY, floor(uFrame * 25.0))
+			);
 
-		uv -= 0.5;
-		uv = fisheye(uv);
-		float vign = vignette(uv);
-		uv += 0.5;
-		uv.y += 1.0 / YRES * SCANFLICKER;
+			// Small horizontal interference.
+			if (randomValue > 0.985)
+			{
+				uv.x += (randomValue - 0.985)
+					* 0.06;
+			}
 
-		// interference
-		float r = random(vec2(0.0, scany), uFrame/60.);
-		if (r > 0.99) {r *= 3.0;}
-		float ifx1 = INTERFERENCE1 * 2.0 / openfl_TextureSize.x * r;
-		float ifx2 = INTERFERENCE2 * (r * peak(uv.y, 0.2, 0.2));
-		uv.x += ifx1 + -ifx2;
+			// Tiny vertical scan displacement.
+			uv.y += 0.002;
 
-		vec4 out_color = texture2D(bitmap, uv);
+			vec4 tex = flixel_texture2D(bitmap, uv);
 
-		float scanl = 0.5 + 0.5 * abs(sin(PI * uv.y * YRES));
+			// CRT scanlines.
+			float scanline =
+				0.5 +
+				0.5 * abs(
+					sin(uv.y * YRES * 3.14159265)
+				);
 
-		vec3 rgb = vign * out_color.rgb;
-		gl_FragColor = vec4(mix(rgb, rgb * scanl, uScanlineEffect), out_color.a);
-	}
+			float vign = vignette(uv);
+
+			vec3 rgb = tex.rgb * vign;
+
+			rgb = mix(
+				rgb,
+				rgb * scanline,
+				uScanlineEffect
+			);
+
+			gl_FragColor = vec4(rgb, tex.a);
+		}
 	')
+
 	public function new(scanlineEffect:Float = 1) {
 		super();
+
 		this.uFrame.value = [0];
 		this.uScanlineEffect.value = [scanlineEffect];
 	}
@@ -103,118 +112,160 @@ class NTSCSFilter extends FlxShader {
 	}
 }
 
-class NTSCGlitch extends FlxShader // stolen from that one popular vhs shader used in ourple guy criminal
-{
+
+/* ============================================================
+ * NTSC GLITCH
+ * ============================================================ */
+
+class NTSCGlitch extends FlxShader {
 	@:glFragmentSource('
-     #pragma header
+		#pragma header
 
-    uniform float time;
-    uniform vec2 resolution;
+		uniform float time;
+		uniform float glitchAmount;
 
-    uniform float glitchAmount;
+		float hash(vec2 p)
+		{
+			return fract(
+				sin(dot(p, vec2(89.44, 19.36)))
+				* 22189.22
+			);
+		}
 
-    #define PI 3.14159265
+		// Cheap 2D value noise.
+		float noise(vec2 p)
+		{
+			vec2 i = floor(p);
+			vec2 f = fract(p);
 
-    vec4 tex2D( sampler2D _tex, vec2 _p ){
-        vec4 col = texture2D( _tex, _p );
-        if ( 0.5 < abs( _p.x - 0.5 ) ) {
-            col = vec4( 0.1 );
-        }
-        return col;
-    }
+			f = f * f * (3.0 - 2.0 * f);
 
-    float hash( vec2 _v ){
-        return fract( sin( dot( _v, vec2( 89.44, 19.36 ) ) ) * 22189.22 );
-    }
+			float a = hash(i);
+			float b = hash(i + vec2(1.0, 0.0));
+			float c = hash(i + vec2(0.0, 1.0));
+			float d = hash(i + vec2(1.0, 1.0));
 
-    float iHash( vec2 _v, vec2 _r ){
-        float h00 = hash( vec2( floor( _v * _r + vec2( 0.0, 0.0 ) ) / _r ) );
-        float h10 = hash( vec2( floor( _v * _r + vec2( 1.0, 0.0 ) ) / _r ) );
-        float h01 = hash( vec2( floor( _v * _r + vec2( 0.0, 1.0 ) ) / _r ) );
-        float h11 = hash( vec2( floor( _v * _r + vec2( 1.0, 1.0 ) ) / _r ) );
-        vec2 ip = vec2( smoothstep( vec2( 0.0, 0.0 ), vec2( 1.0, 1.0 ), mod( _v*_r, 1. ) ) );
-        return ( h00 * ( 1. - ip.x ) + h10 * ip.x ) * ( 1. - ip.y ) + ( h01 * ( 1. - ip.x ) + h11 * ip.x ) * ip.y;
-    }
+			return mix(
+				mix(a, b, f.x),
+				mix(c, d, f.x),
+				f.y
+			);
+		}
 
-    float noise( vec2 _v ){
-        float sum = 0.;
-        for( int i=1; i<9; i++ )
-        {
-            sum += iHash( _v + vec2( i ), vec2( 2. * pow( 2., float( i ) ) ) ) / pow( 2., float( i ) );
-        }
-        return sum;
-    }
+		void main()
+		{
+			vec2 uv = openfl_TextureCoordv.xy;
 
-    void main(){
-        vec2 uvn = openfl_TextureCoordv.xy;
+			float t = time;
 
-        // tape wave
-        uvn.x += ( noise( vec2( uvn.y, time ) ) - 0.5 )* 0.002;
-        uvn.x += ( noise( vec2( uvn.y * 100.0, time * 10.0 ) ) - 0.5 ) * (0.01*glitchAmount);
+			// Low-frequency tape movement.
+			float wave = noise(
+				vec2(uv.y * 3.0, t * 0.5)
+			);
 
-        vec4 col = tex2D( bitmap, uvn );
+			// High-frequency glitch.
+			float glitch = noise(
+				vec2(uv.y * 40.0, t * 4.0)
+			);
 
-        col *= 1.0 + clamp( noise( vec2( 0.0, uvn.y + time * 0.2 ) ) * 0.6 - 0.25, 0.0, 0.1 );
+			float offset =
+				(wave - 0.5) * 0.002 +
+				(glitch - 0.5) * 0.01 * glitchAmount;
 
-        gl_FragColor = col;
-    }
-    ')
-	public override function new(?_glitch:Float = 2)
-	{
+			uv.x += offset;
+
+			vec4 col = flixel_texture2D(bitmap, uv);
+
+			// Cheap brightness flicker.
+			float flicker = noise(
+				vec2(uv.y * 2.0, t * 0.5)
+			);
+
+			col.rgb *= 1.0 + clamp(
+				flicker * 0.06 - 0.025,
+				0.0,
+				0.1
+			);
+
+			gl_FragColor = col;
+		}
+	')
+
+	public override function new(?_glitch:Float = 2) {
 		super();
 
 		time.value = [0];
-		resolution.value = [FlxG.width, FlxG.height];
 
 		setGlitch(_glitch);
 	}
 
-	public inline function setGlitch(?amount:Float = 0)
-	{
+	public inline function setGlitch(?amount:Float = 0) {
 		glitchAmount.value = [amount];
 	}
 
-	public inline function update(elapsed:Float)
-	{
+	public inline function update(elapsed:Float) {
 		time.value[0] += elapsed;
 	}
 }
 
+
+/* ============================================================
+ * TV STATIC
+ * ============================================================ */
+
 class TVStatic extends FlxShader {
 	@:glFragmentSource('
-    #pragma header
+		#pragma header
 
-	uniform float iTime;
-	uniform float strengthMulti;
-	uniform float imtoolazytonamethis;
+		uniform float iTime;
+		uniform float strengthMulti;
+		uniform float imtoolazytonamethis;
 
-	const float maxStrength = .8;
-	const float minStrength = 0.3;
+		const float SPEED = 20.0;
 
-	const float speed = 20.00;
+		float random(vec2 p)
+		{
+			return fract(
+				sin(dot(p, vec2(10.998, 98.233)))
+				* 12433.14159
+			);
+		}
 
-	float random (vec2 noise)
-	{
-		return fract(sin(dot(noise.xy,vec2(10.998,98.233)))*12433.14159265359);
-	}
+		void main()
+		{
+			vec2 uv = openfl_TextureCoordv.xy;
 
-	void main()
-	{
-		
-		vec2 uv = openfl_TextureCoordv.xy;
-		vec2 uv2 = fract(openfl_TextureCoordv.xy*fract(sin(iTime*speed)));
-		
-		float _maxStrength = clamp(sin(iTime/2.0),minStrength+imtoolazytonamethis,maxStrength) * strengthMulti;
-		
-		vec3 colour = vec3(random(uv2.xy) - 0.1)*_maxStrength;
-		vec3 background = vec3(flixel_texture2D(bitmap, uv));
-		
-		gl_FragColor = vec4(background-colour,1.0);
-	}
+			// Stable animated random coordinates.
+			vec2 noiseUV = fract(
+				uv * 64.0 +
+				vec2(iTime * SPEED)
+			);
+
+			float strength =
+				clamp(
+					sin(iTime * 0.5),
+					0.3 + imtoolazytonamethis,
+					0.8
+				)
+				* strengthMulti;
+
+			float staticNoise =
+				random(noiseUV) - 0.1;
+
+			vec3 background =
+				flixel_texture2D(bitmap, uv).rgb;
+
+			background -=
+				vec3(staticNoise * strength);
+
+			gl_FragColor =
+				vec4(background, 1.0);
+		}
 	')
 
 	public override function new() {
 		super();
+
 		iTime.value = [0];
 		strengthMulti.value = [1];
 		imtoolazytonamethis.value = [0];
@@ -225,37 +276,54 @@ class TVStatic extends FlxShader {
 	}
 }
 
-class Abberation extends FlxShader // https://www.shadertoy.com/view/ltByR3
-{
+
+/* ============================================================
+ * CHROMATIC ABERRATION
+ * ============================================================ */
+
+class Abberation extends FlxShader {
 	@:glFragmentSource('
-    #pragma header
-    
-    uniform float aberrationAmount;
+		#pragma header
 
-    void main()
-    {
-        vec2 uv = openfl_TextureCoordv.xy;
-        vec2 distFromCenter = uv - 0.5;
+		uniform float aberrationAmount;
 
-        vec2 aberrated = aberrationAmount * pow(distFromCenter, vec2(3.0, 3.0));
-        
-        gl_FragColor = vec4
-        (
-            flixel_texture2D(bitmap, uv - aberrated).r,
-            flixel_texture2D(bitmap, uv).g,
-            flixel_texture2D(bitmap, uv + aberrated).b,
-            1.0
-        );
-    }
-    ')
-	public override function new(?chrom:Float = 0)
-	{
+		void main()
+		{
+			vec2 uv = openfl_TextureCoordv.xy;
+
+			vec2 offset =
+				(uv - 0.5) *
+				(uv - 0.5) *
+				(uv - 0.5) *
+				aberrationAmount;
+
+			float r = flixel_texture2D(
+				bitmap,
+				uv - offset
+			).r;
+
+			float g = flixel_texture2D(
+				bitmap,
+				uv
+			).g;
+
+			float b = flixel_texture2D(
+				bitmap,
+				uv + offset
+			).b;
+
+			gl_FragColor =
+				vec4(r, g, b, 1.0);
+		}
+	')
+
+	public override function new(?chrom:Float = 0) {
 		super();
+
 		setChrom(chrom);
 	}
 
-	public inline function setChrom(?amount:Float = 0.1)
-	{
+	public inline function setChrom(?amount:Float = 0.1) {
 		aberrationAmount.value = [amount];
 	}
 }
