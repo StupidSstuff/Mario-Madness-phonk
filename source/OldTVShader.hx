@@ -7,120 +7,273 @@ import haxe.Timer;
 class OldTVShader extends FlxShader
 {
 	@:glFragmentSource('
-        #pragma header
-        #define id vec2(0.,1.)
-        #define k 1103515245U
-        #define PI 3.141592653
-        #define TAU PI * 2.
+#pragma header
 
-        uniform float iTime;
+#define PI 3.141592653
+#define TAU 6.283185306
 
-        //prng func, from https://stackoverflow.com/a/52207531
-        vec3 hash(uvec3 x) {
-            x = ((x>>8U)^x.yzx)*k;
-            x = ((x>>8U)^x.yzx)*k;
-            x = ((x>>8U)^x.yzx)*k;         
-            return vec3(x)*(1.0/float(0xffffffffU));
+uniform float iTime;
+
+// ------------------------------------------------------------
+// Cheap PRNG
+// ------------------------------------------------------------
+
+#define HASH_K 1103515245U
+
+vec3 hash(uvec3 x)
+{
+    x = ((x >> 8U) ^ x.yzx) * HASH_K;
+    x = ((x >> 8U) ^ x.yzx) * HASH_K;
+    x = ((x >> 8U) ^ x.yzx) * HASH_K;
+
+    return vec3(x) * (1.0 / 4294967295.0);
+}
+
+// ------------------------------------------------------------
+// Main
+// ------------------------------------------------------------
+
+void main()
+{
+    vec2 uv = openfl_TextureCoordv.xy;
+
+    bool flag = false;
+    bool flag2 = false;
+
+    // --------------------------------------------------------
+    // Horizontal picture offset / tracking line
+    // --------------------------------------------------------
+
+    float timeMod = 2.5;
+    float repeatTime = 1.25;
+
+    float lineSize = 50.0;
+    float offsetMul = 0.01;
+
+    float updateRate = 50.0;
+    float lineYMultiplier = 100.0;
+
+    float realSize =
+        lineSize / openfl_TextureSize.y * 0.5;
+
+    float position =
+        mod(iTime, timeMod) / 2.0;
+
+    float position2 = -1.0;
+
+    if (iTime > repeatTime)
+    {
+        position2 =
+            mod(iTime - repeatTime, timeMod) / 2.0;
+    }
+
+    bool inLine =
+        abs(uv.y - position) <= realSize;
+
+    if (!inLine && position2 >= 0.0)
+    {
+        inLine =
+            abs(uv.y - position2) <= realSize;
+    }
+
+    if (inLine)
+    {
+        float glitch =
+            hash(
+                uvec3(
+                    0U,
+                    uint(uv.y * lineYMultiplier),
+                    uint(iTime * updateRate)
+                )
+            ).x;
+
+        uv.x -= glitch * offsetMul;
+
+        flag = true;
+    }
+
+    // --------------------------------------------------------
+    // Base image
+    // --------------------------------------------------------
+
+    vec4 col =
+        flixel_texture2D(bitmap, uv);
+
+    // --------------------------------------------------------
+    // Cheap blur / glow
+    //
+    // Original:
+    // 16 directions × 3 quality = 48 samples
+    //
+    // New:
+    // 4 directions × 2 samples = 8 samples
+    // --------------------------------------------------------
+
+    float size = 4.0;
+
+    vec2 radius =
+        size / openfl_TextureSize;
+
+    col += flixel_texture2D(
+        bitmap,
+        uv + vec2(radius.x, 0.0)
+    );
+
+    col += flixel_texture2D(
+        bitmap,
+        uv - vec2(radius.x, 0.0)
+    );
+
+    col += flixel_texture2D(
+        bitmap,
+        uv + vec2(0.0, radius.y)
+    );
+
+    col += flixel_texture2D(
+        bitmap,
+        uv - vec2(0.0, radius.y)
+    );
+
+    col += flixel_texture2D(
+        bitmap,
+        uv + radius
+    );
+
+    col += flixel_texture2D(
+        bitmap,
+        uv - radius
+    );
+
+    col += flixel_texture2D(
+        bitmap,
+        uv + vec2(radius.x, -radius.y)
+    );
+
+    col += flixel_texture2D(
+        bitmap,
+        uv + vec2(-radius.x, radius.y)
+    );
+
+    col /= 9.0;
+
+    // --------------------------------------------------------
+    // Black region on the left
+    // --------------------------------------------------------
+
+    if (uv.x < 0.0)
+    {
+        col = vec4(0.0);
+        flag = false;
+        flag2 = true;
+    }
+
+    // --------------------------------------------------------
+    // Random black glitches / splotches
+    // --------------------------------------------------------
+
+    float blackNoise =
+        hash(
+            uvec3(
+                uint(uv.y * 100.0),
+                0U,
+                uint(iTime * 100.0)
+            )
+        ).x;
+
+    if (blackNoise > 0.92)
+    {
+        float width =
+            (blackNoise - 0.92)
+            * 0.0875;
+
+        if (uv.x < width)
+        {
+            col = vec4(0.0);
+            flag2 = true;
         }
-
-        void main() {
-            bool flag = false;
-            bool flag2 = false;
-
-            vec2 uv = openfl_TextureCoordv;
-            
-            //picture offset
-            float time = 2.0;
-            float timeMod = 2.5;
-            float repeatTime = 1.25;
-            float lineSize = 50.0;
-            float offsetMul = 0.01;
-            float updateRate2 = 50.0;
-            float uvyMul = 100.0;
-            
-            float realSize = lineSize / openfl_TextureSize.y / 2.0;
-            float position = mod(iTime, timeMod) / time;
-            float position2 = 99.;
-            if (iTime > repeatTime) {
-                position2 = mod(iTime - repeatTime, timeMod) / time;
-            }
-            if (!(uv.y - position > realSize || uv.y - position < -realSize)) {
-                uv.x -= hash(uvec3(0., uv.y * uvyMul, iTime * updateRate2)).x * offsetMul;
-                flag = true;
-            } else if (position2 != 99.) {
-                if (!(uv.y - position2 > realSize || uv.y - position2 < -realSize)) {
-                    uv.x -= hash(uvec3(0., uv.y * uvyMul, iTime * updateRate2)).x * offsetMul;
-                    flag = true;
-                }
-            }
-            
-            vec4 col = flixel_texture2D(bitmap, uv);
-            
-            //blur, from https://www.shadertoy.com/view/Xltfzj
-            float directions = 16.0;
-            float quality = 3.0;
-            float size = 4.0;
-
-            vec2 radius = size / openfl_TextureSize;
-            for(float d = 0.0; d < TAU; d += TAU / directions) {
-                for(float i= 1.0 / quality; i <= 1.0; i += 1.0 / quality) {
-                    col += flixel_texture2D(bitmap, uv + vec2(cos(d), sin(d)) * radius * i);	
-                }
-            }
-            col /= quality * directions - 14.0;
-            
-            //for the black on the left
-            if (uv.x < 0.) {
-                col = id.xxxy;
-                flag = false;
-                flag2 = true;
-            }
-            
-            //randomized black shit and sploches
-            float updateRate4 = 100.0;
-            float uvyMul3 = 100.0;
-            float cutoff2 = 0.92;
-            float valMul2 = 0.007;
-            
-            float val2 = hash(uvec3(uv.y * uvyMul3, 0., iTime * updateRate4)).x;
-            if (val2 > cutoff2) {
-                float adjVal2 = (val2 - cutoff2) * valMul2 * (1. / (1. - cutoff2));
-                if (uv.x < adjVal2) {
-                    col = id.xxxy;
-                    flag2 = true;
-                } else {
-                    flag = true;
-                }
-            }
-
-            //static
-            if (!flag2) {
-                float updateRate = 100.0;
-                float mixPercent = 0.05; 
-                col = mix(col, vec4(hash(uvec3(uv * openfl_TextureSize, iTime * updateRate)).rrr, 1.), mixPercent);
-            }
-            
-            //white sploches
-            float updateRate3 = 75.0;
-            float uvyMul2 = 400.0;
-            float uvxMul = 20.0;
-            float cutoff = 0.95;
-            float valMul = 0.7;
-            float falloffMul = 0.7;
-            
-            if (flag) {
-                float val = hash(uvec3(uv.x * uvxMul, uv.y * uvyMul2, iTime * updateRate3)).x;
-                if (val > cutoff) {
-                    float offset = hash(uvec3(uv.y * uvyMul2, uv.x * uvxMul, iTime * updateRate3)).x;
-                    float adjVal = (val - cutoff) * valMul * (1. / (1. - cutoff));
-                    adjVal -= abs((uv.x * uvxMul - (floor(uv.x * uvxMul) + offset)) * falloffMul);
-                    adjVal = clamp(adjVal, 0., 1.);
-                    col = vec4(mix(col.rgb, id.yyy, adjVal), col.a);
-                }
-            }
-            
-            gl_FragColor = col;
+        else
+        {
+            flag = true;
         }
+    }
+
+    // --------------------------------------------------------
+    // Static
+    // --------------------------------------------------------
+
+    if (!flag2)
+    {
+        float staticNoise =
+            hash(
+                uvec3(
+                    uint(uv.x * openfl_TextureSize.x),
+                    uint(uv.y * openfl_TextureSize.y),
+                    uint(iTime * 100.0)
+                )
+            ).x;
+
+        col.rgb =
+            mix(
+                col.rgb,
+                vec3(staticNoise),
+                0.05
+            );
+    }
+
+    // --------------------------------------------------------
+    // White splotches
+    // --------------------------------------------------------
+
+    if (flag)
+    {
+        float val =
+            hash(
+                uvec3(
+                    uint(uv.x * 20.0),
+                    uint(uv.y * 400.0),
+                    uint(iTime * 75.0)
+                )
+            ).x;
+
+        if (val > 0.95)
+        {
+            float offset =
+                hash(
+                    uvec3(
+                        uint(uv.y * 400.0),
+                        uint(uv.x * 20.0),
+                        uint(iTime * 75.0)
+                    )
+                ).x;
+
+            float strength =
+                (val - 0.95) * 14.0;
+
+            strength -=
+                abs(
+                    (
+                        uv.x * 20.0
+                        - (
+                            floor(uv.x * 20.0)
+                            + offset
+                        )
+                    ) * 0.7
+                );
+
+            strength =
+                clamp(strength, 0.0, 1.0);
+
+            col.rgb =
+                mix(
+                    col.rgb,
+                    vec3(1.0),
+                    strength
+                );
+        }
+    }
+
+    gl_FragColor = col;
+}
     ')
 	public function new()
 	{
