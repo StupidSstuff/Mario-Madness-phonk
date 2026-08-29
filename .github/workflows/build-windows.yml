@@ -1,0 +1,83 @@
+name: Build Windows
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    name: Build Windows x64
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Haxe 4.3.7
+        uses: krdlab/setup-haxe@v2
+        with:
+          haxe-version: '4.3.7'
+
+      - name: Setup Haxelib
+        shell: pwsh
+        run: |
+          haxelib setup "$env:USERPROFILE\haxelib"
+          haxe -version
+
+      - name: Install Haxe libraries
+        shell: pwsh
+        run: |
+          haxelib install flixel-addons 3.1.1 --always
+          haxelib install flixel 5.3.1 --always
+          haxelib install flixel-ui 2.5.0 --always
+          haxelib install flixel-tools 1.5.1 --always
+          haxelib install hxCodec 2.6.1 --always
+          haxelib install lime 8.0.2 --always
+          haxelib install openfl 9.2.0 --always
+          haxelib install hscript --always
+          haxelib install linc_luajit --always
+          haxelib set flixel-addons 3.1.1
+          haxelib set flixel 5.3.1
+          haxelib set flixel-ui 2.5.0
+          haxelib set flixel-tools 1.5.1
+          haxelib set hxCodec 2.6.1
+          haxelib set lime 8.0.2
+          haxelib set openfl 9.2.0
+
+      - name: Configure Lime and OpenFL
+        shell: pwsh
+        run: |
+          haxelib run lime setup
+          haxelib run openfl setup
+
+      - name: Build Windows Debug
+        shell: pwsh
+        run: |
+          haxelib run lime build windows -debug
+
+      - name: Package build
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $exe = Get-ChildItem -Path export/debug -Filter *.exe -Recurse | Select-Object -First 1
+          if ($null -eq $exe) {
+            Write-Error 'Windows executable was not found under export/debug.'
+            Get-ChildItem -Path export/debug -Recurse | Select-Object FullName
+            exit 1
+          }
+          $bin = $exe.Directory.FullName
+          Compress-Archive -Path (Join-Path $bin '*') -DestinationPath 'dist/Mario-Madness-Windows.zip' -Force
+          Write-Host "Packaged: $bin"
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: Mario-Madness-Windows-${{ github.sha }}
+          path: dist/Mario-Madness-Windows.zip
+          if-no-files-found: error
+          retention-days: 14
